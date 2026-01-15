@@ -1,19 +1,19 @@
-from fastapi import FastAPI, Request
-from limiting_algorithms import RateLimitExceeded, TokenBucket
+from fastapi import FastAPI, Request, HTTPException
+from limiting_algorithms import TokenBucket, RateLimitExceeded
+
 app = FastAPI()
-ip_addresses = {}
+bucket = TokenBucket()   # Redis-backed, shared
 
 @app.get("/limited")
 def limited(request: Request):
-    client = request.client.host
+    ip = request.client.host
+
     try:
-        if client not in ip_addresses:
-            ip_addresses[client] = TokenBucket()
-        if ip_addresses[client].allow_request():
-            return "This is a limited use API"
+        bucket.allow_request(ip)
+        return "This is a limited use API"
     except RateLimitExceeded as e:
         raise e
 
 @app.get("/unlimited")
-def unlimited(request: Request):
+def unlimited():
     return "Free to use API limitless"
