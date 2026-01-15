@@ -1,35 +1,40 @@
-from datetime import datetime, timedelta
-import threading
+import time
+import redis
 from fastapi import HTTPException
 
-class RateLimit:
-    def __init__(self):
-        self.interval = 60
-        self.limit_per_interval = 60
+r = redis.Redis(host="redis", port=6379, decode_responses=True)
 
 class RateLimitExceeded(HTTPException):
     def __init__(self, detail="Rate limit exceeded"):
         super().__init__(status_code=429, detail=detail)
 
-class TokenBucket(RateLimit):
+class TokenBucket:
     def __init__(self):
-        super().__init__()
-        self.total_capacity = 10
-        self.token_interval = 1
-        self.tokens_per_interval = 1
-        self.tokens = 10
-        self.last_updated = datetime.now()
-        self.lock = threading.Lock()
+        self.capacity = 10
+        self.refill_rate = 1  # tokens per second
 
-    def allow_request(self):
-        with self.lock:
-            curr = datetime.now()
-            gap = (curr - self.last_updated).total_seconds()
-            tokens_to_add =  gap*self.tokens_per_interval
-            self.tokens = min(self.total_capacity,tokens_to_add+self.tokens)
-            self.last_updated = curr
+    def allow_request(self, ip: str):
+        now = time.time()
+        key = f"bucket:{ip}"
 
-            if self.tokens>=1:
-                self.tokens-=1
-                return True
+        # Get last state
+        data = r.hmget(key, "tokens", "last")
+
+        tokens = float(data[0]) if data[0] else self.capacity
+        last = float(data[1]) if data[1] else now
+
+        # Refill tokens
+        delta = now - last
+        tokens = min(self.capacity, tokens + delta * self.refill_rate)
+
+        if tokens < 1:
             raise RateLimitExceeded()
+
+        # Consume token
+        tokens -= 1
+
+        # Save back to Redis
+        r.hset(key, mapping={"tokens": tokens, "last": now})
+        r.expire(key, 60)
+
+        return True
